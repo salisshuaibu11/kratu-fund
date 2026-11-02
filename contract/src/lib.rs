@@ -1,5 +1,10 @@
 use near_sdk::store::{IterableMap, LookupMap};
-use near_sdk::{env, near, require, AccountId, NearToken, PanicOnDefault, Promise};
+use near_sdk::json_types::U128;
+use near_sdk::serde_json::json;
+use near_sdk::{
+    env, near, require, AccountId, Gas, NearToken, PanicOnDefault, Promise, PromiseOrValue,
+    PromiseResult,
+};
 
 /// Items a learner must newly master before a milestone payout is released.
 pub const MILESTONE_SIZE: u32 = 50;
@@ -7,6 +12,9 @@ pub const MILESTONE_SIZE: u32 = 50;
 /// Guards against a compromised oracle claiming implausible progress.
 pub const MAX_ITEMS_PER_REPORT: u32 = 150;
 const DAY_NS: u64 = 86_400_000_000_000;
+const FT_TRANSFER_GAS: Gas = Gas::from_tgas(15);
+const CALLBACK_GAS: Gas = Gas::from_tgas(10);
+const ONE_YOCTO: NearToken = NearToken::from_yoctonear(1);
 
 #[near(serializers = [json, borsh])]
 #[derive(Clone)]
@@ -26,7 +34,13 @@ pub struct LearningFund {
     owner: AccountId,
     /// Account allowed to report learner progress (the Kratu sync service).
     oracle: AccountId,
+    /// Native NEAR (in yocto) or, in token mode, raw token units.
     reward_per_milestone: NearToken,
+    /// If set, the fund holds and pays this NEP-141 token (e.g. a stablecoin)
+    /// instead of native NEAR. All amounts are then raw token units.
+    token: Option<AccountId>,
+    /// Token units held for the pool (token mode only).
+    token_balance: u128,
     /// Most a single centre can receive per UTC day.
     daily_cap_per_centre: NearToken,
     paused: bool,
@@ -45,12 +59,15 @@ impl LearningFund {
         oracle: AccountId,
         reward_per_milestone: NearToken,
         daily_cap_per_centre: NearToken,
+        token: Option<AccountId>,
     ) -> Self {
         Self {
             owner,
             oracle,
             reward_per_milestone,
             daily_cap_per_centre,
+            token,
+            token_balance: 0,
             paused: false,
             centres: IterableMap::new(b"c"),
             rewarded: LookupMap::new(b"r"),
@@ -62,9 +79,26 @@ impl LearningFund {
     /// Anyone can fund the pool.
     #[payable]
     pub fn donate(&mut self) {
+        require!(self.token.is_none(), "This fund takes token donations via ft_transfer_call");
         let amount = env::attached_deposit();
         require!(!amount.is_zero(), "Attach a deposit to donate");
         self.total_donated = self.total_donated.saturating_add(amount);
+    }
+
+    /// NEP-141 receiver: donors call `ft_transfer_call` on the token with this
+    /// contract as receiver. Anything but the configured token is refused.
+    #[allow(unused_variables)]
+    pub fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
+        let token = self.token.as_ref().expect("This fund is not in token mode");
+        require!(&env::predecessor_account_id() == token, "Unsupported token");
+        self.token_balance += amount.0;
+        self.total_donated = self.total_donated.saturating_add(NearToken::from_yoctonear(amount.0));
+        PromiseOrValue::Value(U128(0))
     }
 
     pub fn register_centre(&mut self, centre_id: String, name: String, payee: AccountId) {
@@ -105,7 +139,10 @@ impl LearningFund {
     pub fn withdraw(&mut self, amount: NearToken) -> Promise {
         self.assert_owner();
         require!(self.available_balance() >= amount.as_yoctonear(), "Insufficient funds");
-        Promise::new(self.owner.clone()).transfer(amount)
+        if self.token.is_some() {
+            self.token_balance -= amount.as_yoctonear();
+        }
+        self.pay(self.owner.clone(), amount)
     }
 
     pub fn set_reward(&mut self, reward_per_milestone: NearToken) {
@@ -144,7 +181,7 @@ impl LearningFund {
             .saturating_sub(previous / MILESTONE_SIZE);
 
         if items_mastered > previous {
-            self.rewarded.insert(key, items_mastered);
+            self.rewarded.insert(key.clone(), items_mastered);
             if new_milestones > 0 {
                 let owed = self.reward_per_milestone.as_yoctonear() * new_milestones as u128;
                 require!(self.available_balance() >= owed, "Pool has insufficient funds");
@@ -163,8 +200,16 @@ impl LearningFund {
                 centre.total_paid = centre.total_paid.saturating_add(amount);
                 self.total_paid = self.total_paid.saturating_add(amount);
                 let payee = centre.payee.clone();
+                let centre_id_for_cb = centre_id.clone();
                 self.centres.insert(centre_id, centre);
-                Promise::new(payee).transfer(amount);
+                if self.token.is_some() {
+                    self.token_balance -= owed;
+                }
+                self.pay(payee, amount).then(
+                    Self::ext(env::current_account_id())
+                        .with_static_gas(CALLBACK_GAS)
+                        .on_payout(centre_id_for_cb, key, previous, amount, new_milestones),
+                );
                 return new_milestones;
             }
         }
@@ -172,14 +217,66 @@ impl LearningFund {
         0
     }
 
+    /// If the transfer to the centre failed (e.g. the payee is not registered
+    /// with the token), undo the accounting so the learner can be paid later.
+    #[private]
+    #[allow(deprecated)]
+    pub fn on_payout(
+        &mut self,
+        centre_id: String,
+        key: String,
+        previous: u32,
+        amount: NearToken,
+        milestones: u32,
+    ) {
+        if matches!(env::promise_result(0), PromiseResult::Successful(_)) {
+            return;
+        }
+        env::log_str("Payout failed; progress and totals rolled back");
+        if previous == 0 {
+            self.rewarded.remove(&key);
+        } else {
+            self.rewarded.insert(key, previous);
+        }
+        if let Some(mut centre) = self.centres.get(&centre_id).cloned() {
+            if previous == 0 {
+                centre.learners = centre.learners.saturating_sub(1);
+            }
+            centre.milestones_paid = centre.milestones_paid.saturating_sub(milestones);
+            centre.total_paid = NearToken::from_yoctonear(
+                centre.total_paid.as_yoctonear().saturating_sub(amount.as_yoctonear()),
+            );
+            centre.paid_today = NearToken::from_yoctonear(
+                centre.paid_today.as_yoctonear().saturating_sub(amount.as_yoctonear()),
+            );
+            self.centres.insert(centre_id, centre);
+        }
+        self.total_paid = NearToken::from_yoctonear(
+            self.total_paid.as_yoctonear().saturating_sub(amount.as_yoctonear()),
+        );
+        if self.token.is_some() {
+            self.token_balance += amount.as_yoctonear();
+        }
+    }
+
     // ---- views ----
+
+    /// The NEP-141 token this fund pays in, or None for native NEAR.
+    pub fn get_token(&self) -> Option<AccountId> {
+        self.token.clone()
+    }
 
     pub fn get_config(&self) -> (AccountId, AccountId, NearToken, u32) {
         (self.owner.clone(), self.oracle.clone(), self.reward_per_milestone, MILESTONE_SIZE)
     }
 
     pub fn get_totals(&self) -> (NearToken, NearToken, NearToken) {
-        (self.total_donated, self.total_paid, env::account_balance())
+        let held = if self.token.is_some() {
+            NearToken::from_yoctonear(self.token_balance)
+        } else {
+            env::account_balance()
+        };
+        (self.total_donated, self.total_paid, held)
     }
 
     pub fn get_centre(&self, centre_id: String) -> Option<Centre> {
@@ -194,7 +291,26 @@ impl LearningFund {
         self.rewarded.get(&format!("{centre_id}:{learner_hash}")).copied().unwrap_or(0)
     }
 
+    /// Sends `amount` to `to` in the fund's currency. In token mode the payee
+    /// must already be registered with the token contract (storage deposit).
+    fn pay(&self, to: AccountId, amount: NearToken) -> Promise {
+        match &self.token {
+            None => Promise::new(to).transfer(amount),
+            Some(token) => Promise::new(token.clone()).function_call(
+                "ft_transfer".to_string(),
+                json!({ "receiver_id": to, "amount": amount.as_yoctonear().to_string() })
+                    .to_string()
+                    .into_bytes(),
+                ONE_YOCTO,
+                FT_TRANSFER_GAS,
+            ),
+        }
+    }
+
     fn available_balance(&self) -> u128 {
+        if self.token.is_some() {
+            return self.token_balance;
+        }
         env::account_balance()
             .as_yoctonear()
             .saturating_sub(env::storage_byte_cost().as_yoctonear() * env::storage_usage() as u128)
@@ -225,7 +341,7 @@ mod tests {
 
     fn setup() -> LearningFund {
         testing_env!(ctx("owner.testnet", NearToken::from_near(0), NearToken::from_near(100)).build());
-        let mut c = LearningFund::new(acct("owner.testnet"), acct("oracle.testnet"), NearToken::from_near(1), NearToken::from_near(10));
+        let mut c = LearningFund::new(acct("owner.testnet"), acct("oracle.testnet"), NearToken::from_near(1), NearToken::from_near(10), None);
         c.register_centre("potiskum-1".into(), "Potiskum Centre".into(), acct("centre.testnet"));
         c
     }
@@ -306,6 +422,57 @@ mod tests {
         testing_env!(ctx("new.testnet", NearToken::from_near(0), NearToken::from_near(100)).build());
         c.withdraw(NearToken::from_near(5));
         assert_eq!(c.get_config().0, acct("new.testnet"));
+    }
+
+    fn token_fund() -> LearningFund {
+        testing_env!(ctx("owner.testnet", NearToken::from_near(0), NearToken::from_near(1)).build());
+        let mut c = LearningFund::new(
+            acct("owner.testnet"),
+            acct("oracle.testnet"),
+            NearToken::from_yoctonear(1_000_000),
+            NearToken::from_yoctonear(10_000_000),
+            Some(acct("usdc.testnet")),
+        );
+        c.register_centre("potiskum-1".into(), "Potiskum Centre".into(), acct("centre.testnet"));
+        c
+    }
+
+    #[test]
+    fn token_donations_and_payouts() {
+        let mut c = token_fund();
+        testing_env!(ctx("usdc.testnet", NearToken::from_near(0), NearToken::from_near(1)).build());
+        c.ft_on_transfer(acct("donor.testnet"), U128(5_000_000), String::new());
+        assert_eq!(c.get_totals().2, NearToken::from_yoctonear(5_000_000));
+        testing_env!(ctx("oracle.testnet", NearToken::from_near(0), NearToken::from_near(1)).build());
+        assert_eq!(c.report_progress("potiskum-1".into(), "abc".into(), 100), 2);
+        let (donated, paid, held) = c.get_totals();
+        assert_eq!(donated, NearToken::from_yoctonear(5_000_000));
+        assert_eq!(paid, NearToken::from_yoctonear(2_000_000));
+        assert_eq!(held, NearToken::from_yoctonear(3_000_000));
+    }
+
+    #[test]
+    #[should_panic(expected = "Unsupported token")]
+    fn rejects_other_tokens() {
+        let mut c = token_fund();
+        testing_env!(ctx("fake.testnet", NearToken::from_near(0), NearToken::from_near(1)).build());
+        c.ft_on_transfer(acct("donor.testnet"), U128(1), String::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "Pool has insufficient funds")]
+    fn token_pool_cannot_overspend() {
+        let mut c = token_fund();
+        testing_env!(ctx("oracle.testnet", NearToken::from_near(0), NearToken::from_near(1)).build());
+        c.report_progress("potiskum-1".into(), "abc".into(), 50);
+    }
+
+    #[test]
+    #[should_panic(expected = "token donations via ft_transfer_call")]
+    fn native_donate_blocked_in_token_mode() {
+        let mut c = token_fund();
+        testing_env!(ctx("donor.testnet", NearToken::from_near(1), NearToken::from_near(2)).build());
+        c.donate();
     }
 
     #[test]

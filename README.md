@@ -20,12 +20,15 @@ No personal data goes on-chain. Learners are opaque hashes; Kratu's face pattern
 
 - **Kratu has no public API.** `oracle/feed.json` is **mock data** shaped like the pilot records Kratu says its controller syncs when online. Nothing here is affiliated with or endorsed by Kratu.
 - The oracle is a trusted account. A production version would need attestation of the tablets (e.g. TEE) so the oracle cannot invent progress.
-- Payouts are in native NEAR. Stablecoin payouts via NEP-141 / NEAR Intents are the obvious next step.
-- Contract logic has 9 passing unit tests. It is deployed on NEAR testnet at `kratu-fund-salisu.testnet` (reward 0.1 NEAR per 50 items, daily cap 1 NEAR per centre) and was exercised end to end: two centres registered, 2 NEAR donated, the mock feed synced, and 8 milestones (0.8 NEAR) recorded as paid. In that run the owner, oracle and payee were all the same account.
+- Payouts work in native NEAR or, in **token mode**, in any NEP-141 token (a stablecoin in production). Donors fund a token-mode fund with `ft_transfer_call`. The payee must be storage-registered on the token; if a transfer fails, a callback rolls back the learner's progress, the centre totals and the pool, so the learner can be paid on a later sync. Cross-chain donations via NEAR Intents are not built yet.
+- 13 unit tests pass. Two testnet deployments were exercised end to end with the mock feed:
+  - `kratu-fund-salisu.testnet`: native NEAR mode. 8 milestones (0.8 NEAR) recorded as paid.
+  - `kratu-fund-v2-salisu.testnet`: token mode, paying `mock-usdc-salisu.testnet` (a testnet-only mock token in `mock-usdc/`, 6 decimals). The first sync ran with an unregistered payee and rolled back cleanly (paid stayed 0). After registering the payee, the next sync paid 8 mUSDC to `centre-salisu.testnet`, and the fund's totals matched the token balances.
+- Not yet tested on-chain: the pause, daily-cap and jump-cap rejections, and a real wallet donation from the dashboard. These are covered by unit tests only.
 
 ## Roadmap
 
-1. Stablecoin payouts (NEP-141, cross-chain donations via NEAR Intents).
+1. Cross-chain donations via NEAR Intents.
 2. Donor governance over reward rate and large payouts (SputnikDAO / Trezu).
 3. Tablet attestation (TEE) so the oracle cannot fabricate progress.
 4. Privacy-preserving learner credential badges (NEP-171).

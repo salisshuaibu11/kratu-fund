@@ -69,7 +69,7 @@
     <h1>Kratu Learning Fund</h1>
     <p class="lede">Donations sit in a pool on NEAR and are released to a learning centre only when children there master English items in Kratu, an offline Hausa-first tutor. Everything below is read live from the contract.</p>
     <form class="bar" id="f">
-      <input id="contract" aria-label="Contract account" value="kratu-fund-salisu.testnet" required spellcheck="false" autocomplete="off">
+      <input id="contract" aria-label="Contract account" value="kratu-fund-v2-salisu.testnet" required spellcheck="false" autocomplete="off">
       <select id="net" aria-label="Network"><option>testnet</option><option>mainnet</option></select>
       <button type="submit">Load</button>
     </form>
@@ -82,6 +82,7 @@
     <h2>Fund learning</h2>
     <div class="lookup">
       <div class="status" id="wstatus">Connect a NEAR wallet to donate. Funds are released only as children master items.</div>
+      <div class="status" id="dnote"></div>
       <form class="bar" id="df">
         <button type="button" class="ghost" id="connect">Connect wallet</button>
         <input id="amt" type="number" min="0.1" step="0.1" value="1" aria-label="Amount in NEAR" style="max-width:120px;flex:0 0 120px">
@@ -122,16 +123,17 @@
 <script>
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const state = { net:"testnet", contract:"", size:50, token:null, dec:24, sym:"Ⓝ" };
+window.fund = state;
 const nearFmt = (y) => {
-  const n = Number(BigInt(y) / 10n**18n) / 1e6;
-  return n.toLocaleString(undefined, { maximumFractionDigits: n < 1 ? 3 : 2 }) + " Ⓝ";
+  const n = Number(BigInt(y) / 10n ** BigInt(Math.max(state.dec - 6, 0))) / 1e6;
+  return n.toLocaleString(undefined, { maximumFractionDigits: n < 1 ? 3 : 2 }) + " " + state.sym;
 };
-const state = { net:"testnet", contract:"", size:50 };
 
-async function view(method, args = {}) {
+async function view(method, args = {}, account = state.contract) {
   const r = await fetch(`https://rpc.${state.net}.near.org`, { method:"POST", headers:{ "content-type":"application/json" },
     body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"query", params:{ request_type:"call_function", finality:"final",
-      account_id:state.contract, method_name:method, args_base64:btoa(JSON.stringify(args)) } }) });
+      account_id:account, method_name:method, args_base64:btoa(JSON.stringify(args)) } }) });
   const j = await r.json();
   if (j.error) throw new Error(j.error.data || j.error.message || "RPC error");
   if (j.result.error) throw new Error(/does not exist/.test(j.result.error) ? "No contract found on that account." : j.result.error);
@@ -144,11 +146,13 @@ async function load() {
   $("out").innerHTML = '<div class="grid"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>';
   $("status").textContent = "Loading from NEAR…";
   try {
-    const [[, , reward, size], [donated, paid, balance], centres] = await Promise.all([view("get_config"), view("get_totals"), view("list_centres")]);
-    state.size = size;
+    const [[, , reward, size], [donated, paid, balance], centres, token] = await Promise.all([view("get_config"), view("get_totals"), view("list_centres"), view("get_token")]);
+    state.size = size; state.token = token;
+    if (token) { const m = await view("ft_metadata", {}, token); state.dec = m.decimals; state.sym = m.symbol; }
+    else { state.dec = 24; state.sym = "Ⓝ"; }
     const totalMilestones = centres.reduce((a, [, c]) => a + c.milestones_paid, 0);
     const learners = centres.reduce((a, [, c]) => a + c.learners, 0);
-    const maxPaid = centres.reduce((m, [, c]) => Math.max(m, Number(BigInt(c.total_paid) / 10n**18n)), 1);
+    const maxPaid = centres.reduce((m, [, c]) => Math.max(m, Number(BigInt(c.total_paid))), 1);
     $("out").innerHTML = `
       <div class="grid">
         <div class="stat hero"><div class="v">${nearFmt(paid)}</div><div class="l">paid for learning</div></div>
@@ -158,7 +162,7 @@ async function load() {
       </div>
       <h2>Learning centres <span class="badge">${totalMilestones} milestones paid</span></h2>
       <div class="centres">${centres.map(([id, c]) => {
-        const pct = Math.max(2, Math.round(Number(BigInt(c.total_paid) / 10n**18n) / maxPaid * 100));
+        const pct = Math.max(2, Math.round(Number(BigInt(c.total_paid)) / maxPaid * 100));
         return `<article class="centre">
           <div class="centre-head"><h3>${esc(c.name)} <code>${esc(id)}</code></h3><span class="paid">${nearFmt(c.total_paid)}</span></div>
           <div class="meta"><span>${c.learners} learner${c.learners === 1 ? "" : "s"}</span><span>${c.milestones_paid} milestone${c.milestones_paid === 1 ? "" : "s"} paid</span><span>pays to ${esc(c.payee)}</span></div>
@@ -166,6 +170,7 @@ async function load() {
         </article>`; }).join("") || '<div class="msg">No centres registered yet.</div>'}</div>`;
     $("lc").innerHTML = centres.map(([id, c]) => `<option value="${esc(id)}">${esc(c.name)}</option>`).join("");
     $("lookup-section").hidden = centres.length === 0;
+    $("dnote").textContent = token ? `This fund pays in ${state.sym} (${token}). Your wallet needs a ${state.sym} balance and storage registered on that token.` : "This fund pays in native NEAR.";
     $("status").textContent = `Live from ${state.contract} · updated ${new Date().toLocaleTimeString()}`;
   } catch (err) {
     $("lookup-section").hidden = true;
@@ -214,13 +219,18 @@ try {
   });
   el("df").addEventListener("submit", async (e) => {
     e.preventDefault();
-    const near = Number(el("amt").value);
-    if (!(near > 0)) return;
-    const yocto = (BigInt(Math.round(near * 1e6)) * 10n ** 18n).toString();
+    const amount = Number(el("amt").value);
+    if (!(amount > 0)) return;
+    const f = window.fund;
+    const units = (BigInt(Math.round(amount * 1e6)) * 10n ** BigInt(Math.max(f.dec - 6, 0))).toString();
+    const fundId = document.getElementById("contract").value.trim();
     try {
       const wallet = await selector.wallet();
-      await wallet.signAndSendTransaction({ receiverId: document.getElementById("contract").value.trim(),
-        actions: [{ type: "FunctionCall", params: { methodName: "donate", args: {}, gas: "30000000000000", deposit: yocto } }] });
+      const action = f.token
+        ? { receiverId: f.token, params: { methodName: "ft_transfer_call", args: { receiver_id: fundId, amount: units, msg: "" }, gas: "100000000000000", deposit: "1" } }
+        : { receiverId: fundId, params: { methodName: "donate", args: {}, gas: "30000000000000", deposit: units } };
+      await wallet.signAndSendTransaction({ receiverId: action.receiverId,
+        actions: [{ type: "FunctionCall", params: action.params }] });
       el("dr").innerHTML = '<div class="msg">Thank you. Donation submitted. Reloading totals…</div>';
       setTimeout(() => document.getElementById("f").requestSubmit(), 3000);
     } catch (err) { el("dr").innerHTML = `<div class="msg err" role="alert">${String(err.message || err).replace(/</g, "&lt;")}</div>`; }
