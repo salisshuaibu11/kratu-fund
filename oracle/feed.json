@@ -1,0 +1,11 @@
+{
+  "_note": "MOCK DATA. Kratu has no public API; this mimics the pilot records its controller pushes when online. learner_hash is an opaque id, never a name or face pattern.",
+  "centres": {
+    "potiskum-1": {
+      "learners": { "a3f9": 142, "b71c": 87, "c20e": 49, "d5aa": 203 }
+    },
+    "potiskum-2": {
+      "learners": { "e91b": 61, "f003": 12 }
+    }
+  }
+}

@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kratu Learning Fund</title>
+<meta name="description" content="Donations released to learning centres only as children master English items. Live from NEAR.">
+<style>
+  :root {
+    --bg:#faf8f3; --surface:#ffffff; --fg:#1d2a24; --muted:#66726b; --line:#e8e4d9;
+    --accent:#0b7a4b; --accent-soft:#e3f3ea; --warn:#b4540a; --err:#b3261e; --track:#ece8dc;
+    --radius:14px; --shadow:0 1px 2px rgba(20,30,25,.06), 0 6px 18px rgba(20,30,25,.05);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#101512; --surface:#18201b; --fg:#e9efe9; --muted:#93a198; --line:#27322b;
+      --accent:#4cd495; --accent-soft:#17301f; --warn:#f0a35e; --err:#ff8a80; --track:#26302a; --shadow:none; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }
+  .wrap { max-width:880px; margin:0 auto; padding:0 16px 64px; }
+  header { padding:36px 0 8px; }
+  .eyebrow { color:var(--accent); font-weight:600; font-size:.8rem; letter-spacing:.08em; text-transform:uppercase; }
+  h1 { font-size:clamp(1.7rem,5vw,2.4rem); line-height:1.15; margin:.25em 0 .35em; }
+  .lede { color:var(--muted); max-width:60ch; margin:0; }
+  .bar { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:22px 0 6px; }
+  .bar input, .bar select { padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--surface); color:var(--fg); font:inherit; min-height:44px; }
+  .bar input { flex:1 1 240px; }
+  button { font:inherit; min-height:44px; padding:0 18px; border-radius:10px; border:0; background:var(--accent); color:#fff; font-weight:600; cursor:pointer; }
+  @media (prefers-color-scheme: dark) { button { color:#06210f; } }
+  button:hover { filter:brightness(1.07); } button:focus-visible, input:focus-visible, select:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--line); }
+  .status { color:var(--muted); font-size:.85rem; min-height:1.3em; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:12px; margin:20px 0 28px; }
+  @media (max-width:560px) { .grid { grid-template-columns:1fr 1fr; } .stat { padding:12px; } .stat .v { font-size:1.3rem; } }
+  .stat { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); }
+  .stat .v { font-size:1.55rem; font-weight:700; letter-spacing:-.01em; }
+  .stat .l { color:var(--muted); font-size:.85rem; }
+  .stat.hero .v { color:var(--accent); }
+  h2 { font-size:1.15rem; margin:32px 0 12px; }
+  .centres { display:grid; gap:12px; }
+  .centre { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); }
+  .centre-head { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:baseline; }
+  .centre h3 { margin:0; font-size:1.05rem; } .centre code { color:var(--muted); font-size:.8rem; }
+  .paid { font-weight:700; color:var(--accent); }
+  .meta { display:flex; gap:18px; flex-wrap:wrap; color:var(--muted); font-size:.88rem; margin:8px 0 12px; }
+  .meter { height:8px; background:var(--track); border-radius:99px; overflow:hidden; }
+  .meter > i { display:block; height:100%; background:var(--accent); border-radius:99px; transition:width .5s ease; }
+  .meter-cap { display:flex; justify-content:space-between; font-size:.78rem; color:var(--muted); margin-top:4px; }
+  .lookup { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:16px; box-shadow:var(--shadow); }
+  .lookup .bar { margin:8px 0 0; } .result { margin-top:14px; }
+  .steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; counter-reset:s; padding:0; list-style:none; margin:0; }
+  .steps li { counter-increment:s; background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:14px 16px 14px 52px; position:relative; color:var(--muted); font-size:.92rem; }
+  .steps li::before { content:counter(s); position:absolute; left:14px; top:12px; width:26px; height:26px; border-radius:50%; background:var(--accent-soft); color:var(--accent); font-weight:700; display:grid; place-items:center; font-size:.85rem; }
+  .steps b { color:var(--fg); display:block; }
+  .msg { padding:14px 16px; border-radius:var(--radius); background:var(--surface); border:1px solid var(--line); }
+  .msg.err { border-color:var(--err); color:var(--err); }
+  .skeleton { height:92px; border-radius:var(--radius); background:linear-gradient(90deg,var(--track),var(--surface),var(--track)); background-size:200% 100%; animation:sh 1.2s infinite; }
+  @keyframes sh { to { background-position:-200% 0; } }
+  footer { margin-top:40px; color:var(--muted); font-size:.82rem; border-top:1px solid var(--line); padding-top:16px; }
+  footer a { color:var(--accent); }
+  .badge { display:inline-block; background:var(--accent-soft); color:var(--accent); border-radius:99px; padding:2px 10px; font-size:.75rem; font-weight:600; vertical-align:middle; }
+  @media (prefers-reduced-motion: reduce) { .meter > i, .skeleton { transition:none; animation:none; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Pay for learning, not attendance</div>
+    <h1>Kratu Learning Fund</h1>
+    <p class="lede">Donations sit in a pool on NEAR and are released to a learning centre only when children there master English items in Kratu, an offline Hausa-first tutor. Everything below is read live from the contract.</p>
+    <form class="bar" id="f">
+      <input id="contract" aria-label="Contract account" value="kratu-fund-salisu.testnet" required spellcheck="false" autocomplete="off">
+      <select id="net" aria-label="Network"><option>testnet</option><option>mainnet</option></select>
+      <button type="submit">Load</button>
+    </form>
+    <div class="status" id="status" role="status" aria-live="polite"></div>
+  </header>
+
+  <main id="out" aria-busy="false"></main>
+
+  <section id="donate-section">
+    <h2>Fund learning</h2>
+    <div class="lookup">
+      <div class="status" id="wstatus">Connect a NEAR wallet to donate. Funds are released only as children master items.</div>
+      <form class="bar" id="df">
+        <button type="button" class="ghost" id="connect">Connect wallet</button>
+        <input id="amt" type="number" min="0.1" step="0.1" value="1" aria-label="Amount in NEAR" style="max-width:120px;flex:0 0 120px">
+        <button type="submit" id="donate" disabled>Donate</button>
+      </form>
+      <div class="result" id="dr"></div>
+    </div>
+  </section>
+
+  <section id="lookup-section" hidden>
+    <h2>Check a learner</h2>
+    <div class="lookup">
+      <div class="status">Learners are opaque IDs. No names or faces are ever stored on-chain.</div>
+      <form class="bar" id="lf">
+        <select id="lc" aria-label="Centre"></select>
+        <input id="lh" aria-label="Learner ID" placeholder="Learner ID, e.g. a3f9" required spellcheck="false" autocomplete="off">
+        <button class="ghost" type="submit">Look up</button>
+      </form>
+      <div class="result" id="lr"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>How it works</h2>
+    <ol class="steps">
+      <li><b>Donors fund the pool</b>Anyone can donate. Funds stay in the contract.</li>
+      <li><b>Children learn</b>Kratu measures mastery from what each child says.</li>
+      <li><b>Oracle reports</b>A sync service sends each learner's running total.</li>
+      <li><b>Centre is paid</b>Every 50 newly mastered items releases a payout, never twice.</li>
+    </ol>
+  </section>
+
+  <footer>
+    <span class="badge">Demo data</span> Learner progress comes from a mock feed shaped like Kratu's pilot records. Not affiliated with or endorsed by Kratu. Built for the <a href="https://nearhackathon.com/">NEAR Hackathon</a>.
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const nearFmt = (y) => {
+  const n = Number(BigInt(y) / 10n**18n) / 1e6;
+  return n.toLocaleString(undefined, { maximumFractionDigits: n < 1 ? 3 : 2 }) + " Ⓝ";
+};
+const state = { net:"testnet", contract:"", size:50 };
+
+async function view(method, args = {}) {
+  const r = await fetch(`https://rpc.${state.net}.near.org`, { method:"POST", headers:{ "content-type":"application/json" },
+    body: JSON.stringify({ jsonrpc:"2.0", id:1, method:"query", params:{ request_type:"call_function", finality:"final",
+      account_id:state.contract, method_name:method, args_base64:btoa(JSON.stringify(args)) } }) });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.data || j.error.message || "RPC error");
+  if (j.result.error) throw new Error(/does not exist/.test(j.result.error) ? "No contract found on that account." : j.result.error);
+  return JSON.parse(new TextDecoder().decode(new Uint8Array(j.result.result)));
+}
+
+async function load() {
+  state.net = $("net").value; state.contract = $("contract").value.trim();
+  $("out").setAttribute("aria-busy", "true");
+  $("out").innerHTML = '<div class="grid"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>';
+  $("status").textContent = "Loading from NEAR…";
+  try {
+    const [[, , reward, size], [donated, paid, balance], centres] = await Promise.all([view("get_config"), view("get_totals"), view("list_centres")]);
+    state.size = size;
+    const totalMilestones = centres.reduce((a, [, c]) => a + c.milestones_paid, 0);
+    const learners = centres.reduce((a, [, c]) => a + c.learners, 0);
+    const maxPaid = centres.reduce((m, [, c]) => Math.max(m, Number(BigInt(c.total_paid) / 10n**18n)), 1);
+    $("out").innerHTML = `
+      <div class="grid">
+        <div class="stat hero"><div class="v">${nearFmt(paid)}</div><div class="l">paid for learning</div></div>
+        <div class="stat"><div class="v">${nearFmt(String(BigInt(donated) - BigInt(paid)))}</div><div class="l">of ${nearFmt(donated)} donated still unspent</div></div>
+        <div class="stat"><div class="v">${learners}</div><div class="l">learners across ${centres.length} centre${centres.length === 1 ? "" : "s"}</div></div>
+        <div class="stat"><div class="v">${nearFmt(reward)}</div><div class="l">per ${size} items mastered</div></div>
+      </div>
+      <h2>Learning centres <span class="badge">${totalMilestones} milestones paid</span></h2>
+      <div class="centres">${centres.map(([id, c]) => {
+        const pct = Math.max(2, Math.round(Number(BigInt(c.total_paid) / 10n**18n) / maxPaid * 100));
+        return `<article class="centre">
+          <div class="centre-head"><h3>${esc(c.name)} <code>${esc(id)}</code></h3><span class="paid">${nearFmt(c.total_paid)}</span></div>
+          <div class="meta"><span>${c.learners} learner${c.learners === 1 ? "" : "s"}</span><span>${c.milestones_paid} milestone${c.milestones_paid === 1 ? "" : "s"} paid</span><span>pays to ${esc(c.payee)}</span></div>
+          <div class="meter" role="img" aria-label="Share of largest centre payout"><i style="width:${pct}%"></i></div>
+        </article>`; }).join("") || '<div class="msg">No centres registered yet.</div>'}</div>`;
+    $("lc").innerHTML = centres.map(([id, c]) => `<option value="${esc(id)}">${esc(c.name)}</option>`).join("");
+    $("lookup-section").hidden = centres.length === 0;
+    $("status").textContent = `Live from ${state.contract} · updated ${new Date().toLocaleTimeString()}`;
+  } catch (err) {
+    $("lookup-section").hidden = true;
+    $("out").innerHTML = `<div class="msg err" role="alert"><b>Couldn't load the fund.</b><br>${esc(err.message)}</div>`;
+    $("status").textContent = "";
+  } finally { $("out").setAttribute("aria-busy", "false"); }
+}
+
+$("f").addEventListener("submit", (e) => { e.preventDefault(); load(); });
+$("lf").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const hash = $("lh").value.trim(), centre = $("lc").value;
+  try {
+    const n = await view("get_learner_progress", { centre_id:centre, learner_hash:hash });
+    if (n === 0) { $("lr").innerHTML = '<div class="msg">No progress recorded for that learner yet.</div>'; return; }
+    const done = Math.floor(n / state.size), into = n % state.size, pct = Math.round(into / state.size * 100);
+    $("lr").innerHTML = `<div class="msg"><b>${n} items mastered</b> · ${done} milestone${done === 1 ? "" : "s"} unlocked
+      <div class="meter" style="margin-top:10px" role="img" aria-label="${pct}% to next milestone"><i style="width:${pct}%"></i></div>
+      <div class="meter-cap"><span>${into} of ${state.size}</span><span>${state.size - into} to next payout</span></div></div>`;
+  } catch (err) { $("lr").innerHTML = `<div class="msg err" role="alert">${esc(err.message)}</div>`; }
+});
+load();
+</script>
+<script type="module">
+import { setupWalletSelector } from "https://esm.sh/@near-wallet-selector/core@8.9.13";
+import { setupModal } from "https://esm.sh/@near-wallet-selector/modal-ui@8.9.13";
+import { setupMyNearWallet } from "https://esm.sh/@near-wallet-selector/my-near-wallet@8.9.13";
+
+const el = (id) => document.getElementById(id);
+const css = document.createElement("link");
+css.rel = "stylesheet"; css.href = "https://esm.sh/@near-wallet-selector/modal-ui@8.9.13/styles.css";
+document.head.appendChild(css);
+
+try {
+  const selector = await setupWalletSelector({ network: "testnet", modules: [setupMyNearWallet()] });
+  const modal = setupModal(selector, { contractId: "kratu-fund-salisu.testnet" });
+  const refresh = () => {
+    const acct = selector.store.getState().accounts[0]?.accountId;
+    el("connect").textContent = acct ? `Disconnect ${acct}` : "Connect wallet";
+    el("donate").disabled = !acct;
+    el("wstatus").textContent = acct ? `Connected as ${acct}. Testnet funds only.` : "Connect a NEAR wallet to donate. Funds are released only as children master items.";
+  };
+  selector.store.observable.subscribe(refresh); refresh();
+  el("connect").addEventListener("click", async () => {
+    if (selector.isSignedIn()) { await (await selector.wallet()).signOut(); refresh(); } else modal.show();
+  });
+  el("df").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const near = Number(el("amt").value);
+    if (!(near > 0)) return;
+    const yocto = (BigInt(Math.round(near * 1e6)) * 10n ** 18n).toString();
+    try {
+      const wallet = await selector.wallet();
+      await wallet.signAndSendTransaction({ receiverId: document.getElementById("contract").value.trim(),
+        actions: [{ type: "FunctionCall", params: { methodName: "donate", args: {}, gas: "30000000000000", deposit: yocto } }] });
+      el("dr").innerHTML = '<div class="msg">Thank you. Donation submitted. Reloading totals…</div>';
+      setTimeout(() => document.getElementById("f").requestSubmit(), 3000);
+    } catch (err) { el("dr").innerHTML = `<div class="msg err" role="alert">${String(err.message || err).replace(/</g, "&lt;")}</div>`; }
+  });
+} catch (err) {
+  el("wstatus").textContent = "Wallet connection is unavailable right now. You can still browse the fund.";
+  console.error(err);
+}
+</script>
+</body>
+</html>
